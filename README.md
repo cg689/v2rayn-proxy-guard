@@ -25,6 +25,7 @@ v2rayN 7.x 移除了旧版的"系统代理守护"功能：系统代理只在启�
   - v2rayN 内的系统代理模式不是"自动配置系统代理"（`SysProxyType ≠ ForcedChange`）。
 - 📝 修复留痕：每次纠偏记录时间、修复前的值，方便回溯"是谁动了代理"。
 - 🪶 无常驻内存：以 Windows 计划任务驱动，卸载只需删任务。
+- 🔇 **零弹窗**：任务通过 `run-hidden.vbs`（wscript 宿主）拉起 PowerShell，全程无控制台窗口闪现——直接用计划任务跑 powershell.exe 的话，每次触发都会闪一下蓝色弹窗。
 
 ### 安装
 
@@ -78,7 +79,7 @@ Since v7.x, v2rayN applies the system proxy only once (on core start / server sw
 - **Auto-detects** the local inbound port of your v2rayN installation — from `guiConfigs/guiNConfig.json` (`Inbound[].LocalPort`), falling back to the generated core config `binConfigs/config.json` (supports both sing-box `listen_port` and Xray `port` formats). No hardcoded ports.
 - **Restores** the system proxy to `127.0.0.1:<detected-port>` whenever it was disabled or pointed elsewhere — and logs every fix.
 - **Respects intent**: does nothing when v2rayN is not running, or when v2rayN's own system-proxy mode is "clear"/"unchanged"/PAC.
-- Runs as a plain Windows **scheduled task** (no resident process, no admin rights needed).
+- Runs as a plain Windows **scheduled task** (no resident process, no admin rights needed). The task launches PowerShell through `run-hidden.vbs`, so no console window flashes on each run.
 
 ### Quick start
 

@@ -2,6 +2,10 @@
 .SYNOPSIS
     Registers the v2rayN Proxy Guard as a Windows scheduled task.
 
+    The task launches PowerShell through run-hidden.vbs (wscript.exe host),
+    which has no console window - otherwise a blue console flash would pop
+    up on every trigger.
+
 .PARAMETER IntervalMinutes
     How often the guard runs, in minutes. Default: 5.
 
@@ -19,16 +23,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $scriptPath = Join-Path $PSScriptRoot 'proxy-guard.ps1'
-if (-not (Test-Path $scriptPath)) {
-    throw "proxy-guard.ps1 not found next to install.ps1 ($PSScriptRoot)"
-}
+$vbsPath    = Join-Path $PSScriptRoot 'run-hidden.vbs'
+if (-not (Test-Path $scriptPath)) { throw "proxy-guard.ps1 not found next to install.ps1 ($PSScriptRoot)" }
+if (-not (Test-Path $vbsPath))    { throw "run-hidden.vbs not found next to install.ps1 ($PSScriptRoot)" }
 
-$taskName  = 'v2rayN ProxyGuard'
-$taskArgs  = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`" -Once"
+$taskName = 'v2rayN ProxyGuard'
+# wscript.exe run-hidden.vbs "<script>" [-Port N] -Once
+$taskArgs = "`"$vbsPath`" `"$scriptPath`""
 if ($Port -gt 0) { $taskArgs += " -Port $Port" }
+$taskArgs += ' -Once'
 
 schtasks /create /tn $taskName /sc minute /mo $IntervalMinutes `
-    /tr "powershell.exe $taskArgs" /f | Out-Null
+    /tr "wscript.exe $taskArgs" /f | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "schtasks failed with exit code $LASTEXITCODE" }
 
 Write-Host "OK: scheduled task '$taskName' created (every $IntervalMinutes minute(s))."
@@ -43,7 +49,7 @@ if ($Port -gt 0) {
     & $scriptPath -Once
 }
 
-# and verify the scheduled task itself can start
+# and verify the scheduled task itself can start (runs hidden, no flash)
 schtasks /run /tn $taskName | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "schtasks /run failed with exit code $LASTEXITCODE" }
 Write-Host "Task self-test: triggered '$taskName' once via the Task Scheduler."
