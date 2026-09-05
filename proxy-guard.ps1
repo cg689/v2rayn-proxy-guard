@@ -47,6 +47,21 @@ param(
 $script:ValidProxyServers = @()
 $script:MainPort = 0
 
+# Other proxy clients that legitimately own the system proxy while running.
+# While any of these is active, the guard yields (last activated app wins).
+# NOTE 1: v2rayN's own cores (v2ray/xray/sing-box/mihomo) must NOT be listed
+# here - v2rayN spawns them as children.
+# NOTE 2: only list GUI/client processes that actually SET the system proxy.
+# Background helper services (e.g. clash-verge-service) run permanently and
+# would make the guard yield forever; they never touch the proxy themselves.
+$script:OtherProxyClients = @(
+    'mesl_lite',      # MESL airport client
+    'clash-verge', 'clash-meta', 'clash',
+    'mihomo-party', 'FlClash', 'clash-nyanpasu',
+    'nekoray', 'nekobox',
+    'hiddify', 'karing'
+)
+
 function Write-GuardLog {
     param([string]$Message)
     $line = "{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message
@@ -179,6 +194,16 @@ function Invoke-GuardCheck {
     # ---- precondition 1: v2rayN must be running -----------------------------
     $proc = Get-Process v2rayN -ErrorAction SilentlyContinue
     if (-not $proc) { return }   # v2rayN closed -> user probably wants direct access
+
+    # ---- precondition 2: yield to other proxy clients ----------------------
+    # If e.g. the MESL client is running, it owns the system proxy for now;
+    # restoring v2rayN's port here would break the user's active connection.
+    $other = Get-Process -Name $script:OtherProxyClients -ErrorAction SilentlyContinue
+    if ($other) {
+        $names = ($other | Select-Object -ExpandProperty ProcessName -Unique) -join ', '
+        Write-GuardLog "SKIP: other proxy client running ($names) - letting it own the system proxy."
+        return
+    }
 
     # ---- determine the port to guard ---------------------------------------
     if ($Port -gt 0) {
