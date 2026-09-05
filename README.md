@@ -73,7 +73,7 @@ cd v2rayn-proxy-guard
 
 **v2rayn-proxy-guard** reclaims the Windows system proxy for v2rayN.
 
-Since v2.7, v2rayN applies the system proxy only once (on core start / server switch). If another proxy client overwrites or disables it afterwards, v2rayN never fixes it back and the whole system silently loses connectivity. This project adds the missing watchdog:
+Since v7.x, v2rayN applies the system proxy only once (on core start / server switch). If another proxy client overwrites or disables it afterwards, v2rayN never fixes it back and the whole system silently loses connectivity. This project adds the missing watchdog:
 
 - **Auto-detects** the local inbound port of your v2rayN installation — from `guiConfigs/guiNConfig.json` (`Inbound[].LocalPort`), falling back to the generated core config `binConfigs/config.json` (supports both sing-box `listen_port` and Xray `port` formats). No hardcoded ports.
 - **Restores** the system proxy to `127.0.0.1:<detected-port>` whenever it was disabled or pointed elsewhere — and logs every fix.

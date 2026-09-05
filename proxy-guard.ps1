@@ -14,13 +14,14 @@
     v2rayN, the script does nothing - your intent is respected.
 
 .PARAMETER Port
-    Force a fixed port instead of auto-detection.
+    Force a fixed port instead of auto-detection. The guard still requires
+    v2rayN.exe to be running before it acts.
 
 .PARAMETER Once
     Run one check and exit (used by the scheduled task).
 
 .PARAMETER IntervalMinutes
-    In watch mode: seconds...minutes between checks. Default 5 minutes.
+    In watch mode: minutes between checks. Default 5 minutes.
 
 .PARAMETER LogPath
     Path of the fix log. Default: <profile>\v2rayn-proxy-guard.log
@@ -43,10 +44,8 @@ param(
     [string]$LogPath = "$env:USERPROFILE\v2rayn-proxy-guard.log"
 )
 
-$ErrorActionPreference = 'SilentlyContinue'
-
-$script:ExpectedProxyServer = $null
-$script:ValidProxyServers   = @()
+$script:ValidProxyServers = @()
+$script:MainPort = 0
 
 function Write-GuardLog {
     param([string]$Message)
@@ -122,6 +121,11 @@ function Get-V2rayNPorts {
     }
 
     # --- fallback: the generated core config (binConfigs\config.json) -----
+    # NOTE: on this path the GUI config was unreadable, so SysProxyType is
+    # unknown ($null) and the guard proceeds. If the user actually chose
+    # "clear / unchanged" in v2rayN AND guiNConfig.json is corrupt, the
+    # guard may act against that intent - accepted trade-off, because a
+    # broken guiNConfig.json is far rarer than a hijacked system proxy.
     # sing-box format:  inbounds[].listen_port / type = mixed|socks|http
     # xray format:      inbounds[].port       / protocol = socks|http
     $core = Read-JsonFile (Join-Path $V2rayNDir 'binConfigs\config.json')
@@ -153,49 +157,70 @@ function Test-ProxyMatches {
         if ($ProxyServer -eq $p) { return $true }
     }
     return $false
-}function Invoke-GuardCheck {
+}
+
+function Set-SystemProxy {
+    # writes and VERIFIES; returns $true only when the registry really
+    # holds the expected values afterwards
+    param([string]$Target)
+    $reg = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+    try {
+        Set-ItemProperty $reg -Name ProxyEnable -Value 1 -Type DWord -ErrorAction Stop
+        Set-ItemProperty $reg -Name ProxyServer -Value $Target -Type String -ErrorAction Stop
+    } catch {
+        Write-GuardLog "ERROR: registry write failed: $($_.Exception.Message)"
+        return $false
+    }
+    $check = Get-ItemProperty $reg
+    return ([int]$check.ProxyEnable -eq 1 -and [string]$check.ProxyServer -eq $Target)
+}
+
+function Invoke-GuardCheck {
     # ---- precondition 1: v2rayN must be running -----------------------------
     $proc = Get-Process v2rayN -ErrorAction SilentlyContinue
     if (-not $proc) { return }   # v2rayN closed -> user probably wants direct access
 
-    # ---- locate installation & detect port ---------------------------------
-    $dir = Find-V2rayNDir
-    if (-not $dir) { return }
-
-    $info = Get-V2rayNPorts -V2rayNDir $dir
-    if (-not $info) {
-        Write-GuardLog "WARN: v2rayN found at '$dir' but no inbound port could be detected."
-        return
-    }
-    if ($info.SysProxyType -ne $null -and $info.SysProxyType -ne 1) {
-        # 0 = forced clear, 2 = unchanged, 3 = PAC -> user did not ask for a
-        # fixed system proxy, so we must not fight other settings
-        return
-    }
-
-    $script:MainPort         = $info.MainPort
-    $script:ValidProxyServers = @()
-    foreach ($p in $info.Ports) {
-        $script:ValidProxyServers += "127.0.0.1:$p"
-        $script:ValidProxyServers += "localhost:$p"
-    }
-    # explicit -Port parameter wins over detection
+    # ---- determine the port to guard ---------------------------------------
     if ($Port -gt 0) {
+        # explicit -Port: trust the user, skip installation detection
         $script:MainPort = $Port
         $script:ValidProxyServers = @("127.0.0.1:$Port", "localhost:$Port")
+    } else {
+        $dir = Find-V2rayNDir
+        if (-not $dir) { return }
+
+        $info = Get-V2rayNPorts -V2rayNDir $dir
+        if (-not $info) {
+            Write-GuardLog "WARN: v2rayN found at '$dir' but no inbound port could be detected."
+            return
+        }
+        if ($info.SysProxyType -ne $null -and $info.SysProxyType -ne 1) {
+            # 0 = forced clear, 2 = unchanged, 3 = PAC -> user did not ask for a
+            # fixed system proxy, so we must not fight other settings
+            return
+        }
+        $script:MainPort = $info.MainPort
+        $script:ValidProxyServers = @()
+        foreach ($p in $info.Ports) {
+            $script:ValidProxyServers += "127.0.0.1:$p"
+            $script:ValidProxyServers += "localhost:$p"
+        }
     }
 
     # ---- check & fix --------------------------------------------------------
-    $reg   = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
-    $props = Get-ItemProperty $reg
+    $reg    = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+    $props  = Get-ItemProperty $reg
     $enable = [int]$props.ProxyEnable
     $server = [string]$props.ProxyServer
 
     if ($enable -eq 1 -and (Test-ProxyMatches -ProxyServer $server)) { return }   # all good
 
-    Set-ItemProperty $reg -Name ProxyEnable -Value 1 -Type DWord
-    Set-ItemProperty $reg -Name ProxyServer -Value "127.0.0.1:$($script:MainPort)" -Type String
-    Write-GuardLog "FIXED: proxy was enable=$enable server='$server' -> restored to '127.0.0.1:$($script:MainPort)' (v2rayN at '$dir')"
+    $target = "127.0.0.1:$($script:MainPort)"
+    if (Set-SystemProxy -Target $target) {
+        Write-GuardLog "FIXED: proxy was enable=$enable server='$server' -> restored to '$target'"
+    } else {
+        Write-GuardLog "ERROR: could not restore proxy (wanted enable=1 server='$target', had enable=$enable server='$server')"
+    }
 }
 
 # ----------------------------------------------------------------------------
@@ -207,6 +232,7 @@ if ($Once) {
 }
 
 Write-Host "v2rayN Proxy Guard started. Checking every $IntervalMinutes minute(s). Ctrl+C to stop."
+Write-GuardLog "guard started: interval=${IntervalMinutes}min, port mode=$(if ($Port -gt 0) { "fixed $Port" } else { 'auto' }), log=$LogPath"
 while ($true) {
     Invoke-GuardCheck
     Start-Sleep -Seconds (60 * $IntervalMinutes)

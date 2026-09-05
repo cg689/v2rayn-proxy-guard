@@ -42,3 +42,8 @@ if ($Port -gt 0) {
 } else {
     & $scriptPath -Once
 }
+
+# and verify the scheduled task itself can start
+schtasks /run /tn $taskName | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "schtasks /run failed with exit code $LASTEXITCODE" }
+Write-Host "Task self-test: triggered '$taskName' once via the Task Scheduler."
